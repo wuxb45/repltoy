@@ -1,0 +1,9 @@
+.gdb_history
+*.o
+*.out
+*.txt
+*.log
+*.swp
+*.dis
+*~
+tags
