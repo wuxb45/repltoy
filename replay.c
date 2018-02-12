@@ -216,8 +216,8 @@ struct common_stat {
 struct rep_api {
   void * (*new)(const u32 nr_keys, const u64 max_cap);
   void   (*destory)(void * const rep);
-  void   (*op_set)(void * const rep, const u32 key, const u32 size);
-  void   (*op_get)(void * const rep, const u32 key, const u32 size);
+  void   (*op_set)(void * const rep, const u32 key);
+  void   (*op_get)(void * const rep, const u32 key);
   void   (*op_del)(void * const rep, const u32 key);
   void   (*collect_stat)(void * const rep, struct common_stat * const out);
   void   (*clean_stat)(void * const rep);
@@ -244,7 +244,6 @@ struct lru {
   u64 * bitmap;
   u64 nr_bm;
   struct {
-    u32 size;
     u32 prev;
     u32 next;
   } arr[];
@@ -265,7 +264,6 @@ lru_new(const u32 nr_keys, const u64 max_cap)
   debug_assert(lru->bitmap);
   lru->nr_bm = nr_bm;
   for (u64 i = 0; i < nr_keys; i++) {
-    lru->arr[i].size = 0;
     lru->arr[i].prev = OUTSIDE;
     lru->arr[i].next = OUTSIDE;
   }
@@ -301,33 +299,30 @@ lru_remove(struct lru * const lru, const u32 key)
     const u32 next = lru->arr[key].next;
     const u32 prev = lru->arr[key].prev;
 
-    debug_assert(lru->cur_cap >= lru->arr[key].size);
     debug_assert(lru->cur_keys);
-    lru->cur_cap -= lru->arr[key].size;
+    lru->cur_cap -= 1;
     lru->cur_keys--;
     lru->arr[prev].next = next;
     lru->arr[next].prev = prev;
     // clean up
     lru->arr[key].prev = OUTSIDE;
     lru->arr[key].next = OUTSIDE;
-    lru->arr[key].size = 0;
     lru->bitmap[key>>6] &= (~(UINT64_C(1) << (key & 0x3fu)));
   }
 }
 
   static inline void
-lru_insert(void * const ptr, const u32 key, const u32 size)
+lru_insert(void * const ptr, const u32 key)
 {
   struct lru * const lru = (typeof(lru))ptr;
   const u32 nr_keys = lru->nr_keys;
   debug_assert(false == lru_in(lru, key));
   const u32 head0 = lru->arr[nr_keys].next;
-  lru->arr[key].size = size;
   lru->arr[key].next = head0;
   lru->arr[key].prev = nr_keys;
   lru->arr[head0].prev = key;
   lru->arr[nr_keys].next = key;
-  lru->cur_cap += size;
+  lru->cur_cap += 1;
   lru->cur_keys++;
   debug_assert(lru->cur_keys <= nr_keys);
   lru->bitmap[key>>6] |= (UINT64_C(1) << (key & 0x3fu));
@@ -344,7 +339,7 @@ lru_evict1(struct lru * const lru)
 }
 
   static void
-lru_set(void * const ptr, const u32 key, const u32 size)
+lru_set(void * const ptr, const u32 key)
 {
   struct lru * const lru = (typeof(lru))ptr;
   debug_assert(key < lru->nr_keys);
@@ -353,7 +348,7 @@ lru_set(void * const ptr, const u32 key, const u32 size)
   if (lru_in(lru, key)) {
     lru_remove(lru, key);
   }
-  lru_insert(lru, key, size);
+  lru_insert(lru, key);
   // eviction
   while (lru->cur_cap > lru->max_cap) {
     lru_evict1(lru);
@@ -361,7 +356,7 @@ lru_set(void * const ptr, const u32 key, const u32 size)
 }
 
   static void
-lru_get(void * const ptr, const u32 key, const u32 size)
+lru_get(void * const ptr, const u32 key)
 {
   struct lru * const lru = (typeof(lru))ptr;
   debug_assert(key < lru->nr_keys);
@@ -369,13 +364,12 @@ lru_get(void * const ptr, const u32 key, const u32 size)
 
   if (lru_in(lru, key)) {
     lru->nr_hit++;
-    const u32 size0 = lru->arr[key].size;
     lru_remove(lru, key);
-    lru_insert(lru, key, size0);
+    lru_insert(lru, key);
   } else {
     lru->nr_mis++;
     if (__set_on_miss) {
-      lru_set(ptr, key, size);
+      lru_set(ptr, key);
     }
   }
 }
@@ -455,7 +449,6 @@ struct arc {
   u64 nr_evi; // eviction
 
   struct {
-    u32 size;
     struct {
       u32 prev;
       u32 next;
@@ -516,13 +509,12 @@ arc_remove(const u32 where, struct arc * const arc, const u32 key)
     arc->arr[key].node[where].next = OUTSIDE;
     arc->arr[key].node[where].prev = OUTSIDE;
     // clean
-    arc->caps[where] -= arc->arr[key].size;
-    arc->arr[key].size = 0;
+    arc->caps[where] -= 1;
   }
 }
 
   static inline void
-arc_insert(const u32 where, struct arc * const arc, const u32 key, const u32 size)
+arc_insert(const u32 where, struct arc * const arc, const u32 key)
 {
   const u32 nr_keys = arc->nr_keys;
   debug_assert(where < 4);
@@ -533,8 +525,7 @@ arc_insert(const u32 where, struct arc * const arc, const u32 key, const u32 siz
   arc->arr[key].node[where].next = head0;
   arc->arr[head0].node[where].prev = key;
   arc->arr[nr_keys].node[where].next = key;
-  arc->arr[key].size = size;
-  arc->caps[where] += size;
+  arc->caps[where] += 1;
 }
 
   static inline u32
@@ -564,9 +555,8 @@ arc_move(const u32 fromwhere, const u32 towhere, struct arc * const arc, const u
 {
   debug_assert(arc_in(fromwhere, arc, key));
   debug_assert(key < arc->nr_keys);
-  const u32 size0 = arc->arr[key].size;
   arc_remove(fromwhere, arc, key);
-  arc_insert(towhere, arc, key, size0);
+  arc_insert(towhere, arc, key);
 }
 
   static inline void
@@ -583,24 +573,24 @@ arc_replace(struct arc * const arc)
 }
 
   static inline void
-arc_set(void * const ptr, const u32 key, const u32 size)
+arc_set(void * const ptr, const u32 key)
 {
   struct arc * const arc = (typeof(arc))ptr;
   debug_assert(key < arc->nr_keys);
   if (arc_in(ARC_T1, arc, key)) { // case I.1
     arc_remove(ARC_T1, arc, key);
-    arc_insert(ARC_T2, arc, key, size);
+    arc_insert(ARC_T2, arc, key);
 
   } else if (arc_in(ARC_T2, arc, key)) { // Case I.1
     arc_remove(ARC_T2, arc, key);
-    arc_insert(ARC_T2, arc, key, size);
+    arc_insert(ARC_T2, arc, key);
 
   } else if (arc_in(ARC_B1, arc, key)) { // Case II
     const u64 d1 = (arc->caps[ARC_B1] > arc->caps[ARC_B2])?1:(arc->caps[ARC_B2]/arc->caps[ARC_B1]);
     const u64 pp = arc->p + d1;
     arc->p = (pp < arc->max_cap) ? pp : arc->max_cap;
     arc_remove(ARC_B1, arc, key);
-    arc_insert(ARC_T2, arc, key, size);
+    arc_insert(ARC_T2, arc, key);
     arc_replace(arc);
 
   } else if (arc_in(ARC_B2, arc, key)) { // Case III
@@ -608,11 +598,11 @@ arc_set(void * const ptr, const u32 key, const u32 size)
     const u64 pp = arc->p - d2;
     arc->p = (arc->p < d2) ? 0 : pp;
     arc_remove(ARC_B2, arc, key);
-    arc_insert(ARC_T2, arc, key, size);
+    arc_insert(ARC_T2, arc, key);
     arc_replace(arc);
 
   } else { // Case IV
-    arc_insert(ARC_T1, arc, key, size);
+    arc_insert(ARC_T1, arc, key);
     arc_replace(arc);
     while ((arc->caps[ARC_T1] + arc->caps[ARC_B1]) > arc->max_cap) { // balance L1
       if (arc->caps[ARC_B1] > 0) {
@@ -633,17 +623,16 @@ arc_set(void * const ptr, const u32 key, const u32 size)
 }
 
   static inline void
-arc_get(void * const ptr, const u32 key, const u32 size)
+arc_get(void * const ptr, const u32 key)
 {
   struct arc * const arc = (typeof(arc))ptr;
   if (arc_resident(arc, key)) {
     arc->nr_hit++;
-    const u64 size0 = arc->arr[key].size;
-    arc_set(ptr, key, size0);
+    arc_set(ptr, key);
   } else {
     arc->nr_mis++;
     if (__set_on_miss) {
-      arc_set(ptr, key, size);
+      arc_set(ptr, key);
     }
   }
 }
@@ -693,7 +682,6 @@ struct replay_info {
   void * rep;
   const struct rep_api * api;
   u32 nr_keys;
-  u32 value_size;
   u64 ecap;
   double srate;
   double lb;
@@ -714,13 +702,11 @@ fullpass(const struct replay_info * const info)
     if (v[i] < nr_keys) {
       const double r = ((double)xxhash64(&v[i], sizeof(v[i])))/RAND64_MAX_D;
       if (r >= info->lb && r <= info->ub) {
-        info->api->op_get(info->rep, v[i], info->value_size);
+        info->api->op_get(info->rep, v[i]);
       }
     }
   }
 }
-
-static const u32 value_size = 4096 * 4;
 
   static u64
 getfilesize(const char * const file)
@@ -760,7 +746,6 @@ runtrace106(const u32 nr_keys, const u32 * const tracemap, const u64 na,
     .rep = rep,
     .api = api,
     .nr_keys = nr_keys,
-    .value_size = value_size,
     .ecap = max_cap,
     .srate = srate,
     .lb = lb,
@@ -836,7 +821,7 @@ main(int argc, char ** argv)
   }
   const u32 used_keys = bitmap_count(bm);
   free(bm);
-  const u64 max_cap = ((u64)used_keys) * ((u64)value_size);
+  const u64 max_cap = (u64)used_keys;
   const u64 unit_cap = max_cap / probes;
   for (u64 i = 0; i < probes; i++) {
     mrc[i].cap = unit_cap * (i + 1);
