@@ -216,9 +216,7 @@ struct common_stat {
 struct rep_api {
   void * (*new)(const u32 nr_keys, const u64 max_cap);
   void   (*destory)(void * const rep);
-  void   (*op_set)(void * const rep, const u32 key);
-  void   (*op_get)(void * const rep, const u32 key);
-  void   (*op_del)(void * const rep, const u32 key);
+  void   (*op_access)(void * const rep, const u32 key);
   void   (*collect_stat)(void * const rep, struct common_stat * const out);
   void   (*clean_stat)(void * const rep);
 };
@@ -356,7 +354,7 @@ lru_set(void * const ptr, const u32 key)
 }
 
   static void
-lru_get(void * const ptr, const u32 key)
+lru_access(void * const ptr, const u32 key)
 {
   struct lru * const lru = (typeof(lru))ptr;
   debug_assert(key < lru->nr_keys);
@@ -371,19 +369,6 @@ lru_get(void * const ptr, const u32 key)
     if (__set_on_miss) {
       lru_set(ptr, key);
     }
-  }
-}
-
-  static void
-lru_del(void * const ptr, const u32 key)
-{
-  struct lru * const lru = (typeof(lru))ptr;
-  debug_assert(key < lru->nr_keys);
-  lru->nr_del++;
-
-  if (lru_in(lru, key)) {
-    lru->nr_rmv++;
-    lru_remove(lru, key);
   }
 }
 
@@ -417,9 +402,7 @@ lru_clean_stat(void * const ptr)
 static struct rep_api lru_api = {
   .new = lru_new,
   .destory = lru_destory,
-  .op_set = lru_set,
-  .op_get = lru_get,
-  .op_del = lru_del,
+  .op_access = lru_access,
   .collect_stat = lru_collect_stat,
   .clean_stat = lru_clean_stat,
 };
@@ -623,7 +606,7 @@ arc_set(void * const ptr, const u32 key)
 }
 
   static inline void
-arc_get(void * const ptr, const u32 key)
+arc_access(void * const ptr, const u32 key)
 {
   struct arc * const arc = (typeof(arc))ptr;
   if (arc_resident(arc, key)) {
@@ -635,14 +618,6 @@ arc_get(void * const ptr, const u32 key)
       arc_set(ptr, key);
     }
   }
-}
-
-  static inline void
-arc_del(void * const ptr, const u32 key)
-{
-  struct arc * const arc = (typeof(arc))ptr;
-  arc_remove(ARC_T1, arc, key);
-  arc_remove(ARC_T2, arc, key);
 }
 
   static void
@@ -669,9 +644,7 @@ arc_clean_stat(void * const ptr)
 static struct rep_api arc_api = {
   .new = arc_new,
   .destory = arc_destory,
-  .op_set = arc_set,
-  .op_get = arc_get,
-  .op_del = arc_del,
+  .op_access = arc_access,
   .collect_stat = arc_collect_stat,
   .clean_stat = arc_clean_stat,
 };
@@ -702,7 +675,7 @@ fullpass(const struct replay_info * const info)
     if (v[i] < nr_keys) {
       const double r = ((double)xxhash64(&v[i], sizeof(v[i])))/RAND64_MAX_D;
       if (r >= info->lb && r <= info->ub) {
-        info->api->op_get(info->rep, v[i]);
+        info->api->op_access(info->rep, v[i]);
       }
     }
   }
