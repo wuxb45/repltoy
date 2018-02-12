@@ -225,19 +225,13 @@ static bool __set_on_miss = true;
 
 struct lru {
   u32 nr_keys;
-  u32 cur_keys;
   u64 max_cap;
   u64 cur_cap;
   // stat
-  u64 nr_set;
-  u64 nr_add;
   u64 nr_get;
-  u64 nr_del;
   // internal
-  u64 nr_rmv; // really delete
   u64 nr_hit; // get-hit
   u64 nr_mis; // get-miss
-  u64 nr_evi; // eviction
 
   u64 * bitmap;
   u64 nr_bm;
@@ -254,7 +248,6 @@ lru_new(const u32 nr_keys, const u64 max_cap)
   struct lru * const lru = (typeof(lru))calloc(1, sz);
   debug_assert(lru);
   lru->nr_keys = nr_keys;
-  lru->cur_keys = 0;
   lru->max_cap = max_cap;
   lru->cur_cap = 0;
   const u64 nr_bm = (nr_keys>>6) + 1;
@@ -297,9 +290,7 @@ lru_remove(struct lru * const lru, const u32 key)
     const u32 next = lru->arr[key].next;
     const u32 prev = lru->arr[key].prev;
 
-    debug_assert(lru->cur_keys);
-    lru->cur_cap -= 1;
-    lru->cur_keys--;
+    lru->cur_cap--;
     lru->arr[prev].next = next;
     lru->arr[next].prev = prev;
     // clean up
@@ -320,9 +311,7 @@ lru_insert(void * const ptr, const u32 key)
   lru->arr[key].prev = nr_keys;
   lru->arr[head0].prev = key;
   lru->arr[nr_keys].next = key;
-  lru->cur_cap += 1;
-  lru->cur_keys++;
-  debug_assert(lru->cur_keys <= nr_keys);
+  lru->cur_cap++;
   lru->bitmap[key>>6] |= (UINT64_C(1) << (key & 0x3fu));
 }
 
@@ -333,7 +322,6 @@ lru_evict1(struct lru * const lru)
   const u32 nr_keys = lru->nr_keys;
   const u32 tail0 = lru->arr[nr_keys].prev;
   lru_remove(lru, tail0);
-  lru->nr_evi++;
 }
 
   static void
@@ -341,7 +329,6 @@ lru_set(void * const ptr, const u32 key)
 {
   struct lru * const lru = (typeof(lru))ptr;
   debug_assert(key < lru->nr_keys);
-  lru->nr_set++;
 
   if (lru_in(lru, key)) {
     lru_remove(lru, key);
@@ -388,15 +375,10 @@ lru_collect_stat(void * const ptr, struct common_stat * const out)
 lru_clean_stat(void * const ptr)
 {
   struct lru * const lru = (typeof(lru))ptr;
-  lru->nr_set = 0;
-  lru->nr_add = 0;
   lru->nr_get = 0;
-  lru->nr_del = 0;
 
-  lru->nr_rmv = 0;
   lru->nr_hit = 0;
   lru->nr_mis = 0;
-  lru->nr_evi = 0;
 }
 
 static struct rep_api lru_api = {
@@ -421,15 +403,10 @@ struct arc {
   u64 caps[4];
 
   // stat
-  u64 nr_set;
-  u64 nr_add;
   u64 nr_get;
-  u64 nr_del;
   // internal
-  u64 nr_rmv; // really delete
   u64 nr_hit; // get-hit
   u64 nr_mis; // get-miss
-  u64 nr_evi; // eviction
 
   struct {
     struct {
