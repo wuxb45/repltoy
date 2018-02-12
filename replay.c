@@ -282,64 +282,6 @@ lru_in(struct lru * const lru, const u32 key)
   }
 }
 
-  static inline void
-lru_remove(struct lru * const lru, const u32 key)
-{
-  debug_assert(key < lru->nr_keys);
-  if (lru_in(lru, key)) { // in here
-    const u32 next = lru->arr[key].next;
-    const u32 prev = lru->arr[key].prev;
-
-    lru->cur_cap--;
-    lru->arr[prev].next = next;
-    lru->arr[next].prev = prev;
-    // clean up
-    lru->arr[key].prev = OUTSIDE;
-    lru->arr[key].next = OUTSIDE;
-    lru->bitmap[key>>6] &= (~(UINT64_C(1) << (key & 0x3fu)));
-  }
-}
-
-  static inline void
-lru_insert(void * const ptr, const u32 key)
-{
-  struct lru * const lru = (typeof(lru))ptr;
-  const u32 nr_keys = lru->nr_keys;
-  debug_assert(false == lru_in(lru, key));
-  const u32 head0 = lru->arr[nr_keys].next;
-  lru->arr[key].next = head0;
-  lru->arr[key].prev = nr_keys;
-  lru->arr[head0].prev = key;
-  lru->arr[nr_keys].next = key;
-  lru->cur_cap++;
-  lru->bitmap[key>>6] |= (UINT64_C(1) << (key & 0x3fu));
-}
-
-  static void
-lru_evict1(struct lru * const lru)
-{
-  debug_assert(lru->nr_keys > 0);
-  const u32 nr_keys = lru->nr_keys;
-  const u32 tail0 = lru->arr[nr_keys].prev;
-  lru_remove(lru, tail0);
-}
-
-  static void
-lru_set(void * const ptr, const u32 key)
-{
-  struct lru * const lru = (typeof(lru))ptr;
-  debug_assert(key < lru->nr_keys);
-
-  if (lru_in(lru, key)) {
-    lru_remove(lru, key);
-  }
-  lru_insert(lru, key);
-  // eviction
-  while (lru->cur_cap > lru->max_cap) {
-    lru_evict1(lru);
-  }
-}
-
   static void
 lru_access(void * const ptr, const u32 key)
 {
@@ -349,13 +291,10 @@ lru_access(void * const ptr, const u32 key)
 
   if (lru_in(lru, key)) {
     lru->nr_hit++;
-    lru_remove(lru, key);
-    lru_insert(lru, key);
+    // TODO: your code here
   } else {
     lru->nr_mis++;
-    if (__set_on_miss) {
-      lru_set(ptr, key);
-    }
+    // TODO: your code here
   }
 }
 
